@@ -1,14 +1,14 @@
 package cn.edu.whu.oge
 
 import cn.edu.whu.oge.coverage.COGParser.{TILE_BYTE_COUNT, cogTileQueryForM1, cogTileQueryForM2, getCOGTileByRawTile, getCOGTileByRawTileArray, getCOGTileBytes, getCOGTilesMetaForM1}
-import cn.edu.whu.oge.coverage.CoordinateTransformer.{GEO_TO_PROJ, LAYOUTS, LAYOUT_SCHEME, projTileCodeToGeoExtent}
+import cn.edu.whu.oge.coverage.CoordinateTransformer.{GEO_TO_PROJ, LAYOUTS, projTileCodeToGeoExtent}
 import cn.edu.whu.oge.coverage.TileSerializer.deserializeTileData
 import cn.edu.whu.oge.obs.getMinioClient
-import geotrellis.layer.{Bounds, LayoutDefinition, SpaceTimeKey, SpatialKey, TileLayerMetadata, ZoomedLayoutScheme}
-import geotrellis.proj4.{CRS, LatLng, Transform, WebMercator}
-import geotrellis.raster.reproject.{RasterRegionReproject, Reproject}
+import geotrellis.layer.{Bounds, SpatialKey, TileLayerMetadata}
+import geotrellis.proj4.{CRS, Transform, WebMercator}
+import geotrellis.raster.reproject.RasterRegionReproject
 import geotrellis.raster.resample.ResampleMethod
-import geotrellis.raster.{ArrayTile, CellSize, CellType, GridBounds, IntCellType, MultibandTile, Raster, RasterExtent, Tile, TileLayout}
+import geotrellis.raster.{ArrayTile, GridBounds, IntCellType, MultibandTile, Raster, RasterExtent, Tile}
 import geotrellis.spark._
 import geotrellis.vector.{Extent, Polygon, ProjectedExtent}
 import oge.conf.coverage.CoverageMetadata
@@ -16,10 +16,8 @@ import oge.conf.coverage.CoverageMetadata.queryCoverage
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 
-import java.time.ZoneOffset
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-import scala.math.{max, min}
 
 /**
  * coverage类型数据的算子包
@@ -30,7 +28,7 @@ import scala.math.{max, min}
 package object coverage {
   var geoExtent: Extent = _
   var partitionNum: Int = 16 // Spark任务分区数
-//  var computeStart: Long = System.currentTimeMillis
+  //  var computeStart: Long = System.currentTimeMillis
 
   /**
    * 每个可视瓦片的生成为独立的任务
@@ -52,7 +50,7 @@ package object coverage {
     if (metaList.isEmpty) {
       throw new Exception("No such coverage in database!")
     } else if (metaList.size > 1) {
-      metaList = metaList.take(3)  // 取前三个波段
+      metaList = metaList.take(3) // 取前三个波段
       metaList.foreach(meta => println(meta.measurement))
     }
     val queryGeometry = metaList.head.geom
@@ -79,14 +77,14 @@ package object coverage {
     val tileRdd = sc.parallelize(tileCodesWithId, partitionNum)
       .mapPartitions(par => {
         val obs = getMinioClient
-//        val time2 = System.currentTimeMillis
-//        println(s"分区内计算开始，起始时间为$time2")
+        //        val time2 = System.currentTimeMillis
+        //        println(s"分区内计算开始，起始时间为$time2")
         val ans = par.map { case ((xCode, yCode),
         (coverageMetadata, tileByteCounts, cell, geoTrans, tileOffsets, bandCount)) =>
           // 根据code在meta中找到需要的COG瓦片
-          val extent = projTileCodeToGeoExtent(SpatialKey(xCode, yCode), zoom)
+          val visTileGeoExtent = projTileCodeToGeoExtent(SpatialKey(xCode, yCode), zoom)
           val cogTileMetaArray = getCOGTilesMetaForM1(
-            zoom, coverageMetadata, tileOffsets, cell, geoTrans, tileByteCounts, bandCount, extent, queryGeometry)
+            zoom, coverageMetadata, tileOffsets, cell, geoTrans, tileByteCounts, bandCount, visTileGeoExtent, queryGeometry)
           // 读取COG瓦片
           val time4 = System.currentTimeMillis
           println(s"$xCode-${yCode}瓦片开始读取所需的COG瓦片，当前时间为$time4")
@@ -101,36 +99,13 @@ package object coverage {
           // 计算
           val time6 = System.currentTimeMillis
           println(s"$xCode-${yCode}瓦片开始计算，当前时间为$time6")
-          val trans = Transform(CRS.fromEpsgCode(4326), WebMercator)
-          val (xMin, yMin) = trans(extent.xmin, extent.ymin)
-          val (xMax, yMax) = trans(extent.xmax, extent.ymax)
-          val destExtent = Extent(xMin, yMin, xMax, yMax)
-          val destRaster: Raster[Tile] = Raster(ArrayTile.empty(IntCellType, 256, 256), destExtent)
-          val rrp = implicitly[RasterRegionReproject[Tile]]
-          cogTileArray.foreach { case (tile, innerExtent) =>
-            // TODO 投影不一致时需要考虑gridBounds的计算
-            val gridBounds = GridBounds(0, 0, tile.cols - 1, tile.rows - 1)
-            val innerRasterExtent = RasterExtent(innerExtent, gridBounds.width, gridBounds.height)
-            val outerGridBounds =
-              GridBounds(
-                -gridBounds.colMin,
-                -gridBounds.rowMin,
-                tile.cols - gridBounds.colMin - 1,
-                tile.rows - gridBounds.rowMin - 1
-              )
-            val outerExtent = innerRasterExtent.extentFor(outerGridBounds, clamp = false)
-            val raster = Raster(tile, outerExtent)
-            rrp.regionReprojectMutable(
-              raster, coverageMetadata.crs, WebMercator, destRaster,
-              ProjectedExtent(innerExtent, coverageMetadata.crs).reprojectAsPolygon(WebMercator, 0.05),
-              ResampleMethod.DEFAULT, 0.05)
-          }
+          val destRaster = reproject(cogTileArray, visTileGeoExtent, coverageMetadata.crs)
           val time7 = System.currentTimeMillis
           println(s"$xCode-${yCode}瓦片计算结束，结束时间为$time7，耗时：${time7 - time6}ms")
           (SpatialKey(xCode, yCode), (coverageMetadata.measurementRank, destRaster.tile))
         }
-//        val time3 = System.currentTimeMillis
-//        println(s"分区内计算结束，结束时间为$time3，耗时: ${time3 - time2}ms")
+        //        val time3 = System.currentTimeMillis
+        //        println(s"分区内计算结束，结束时间为$time3，耗时: ${time3 - time2}ms")
         ans
       })
     val multibandTileRdd = tileRdd.groupByKey.map { case (spatialKey, iter) =>
@@ -159,7 +134,7 @@ package object coverage {
     if (metaList.isEmpty) {
       throw new Exception("No such coverage in database!")
     } else if (metaList.size > 1) {
-      metaList = metaList.take(3)  // 取前三个波段
+      metaList = metaList.take(3) // 取前三个波段
       metaList.foreach(meta => println(meta.measurement))
     }
     val queryGeometry = metaList.head.geom
@@ -186,8 +161,8 @@ package object coverage {
     val tileRdd = sc.parallelize(tileCodesWithId, partitionNum)
       .mapPartitions(par => {
         val obs = getMinioClient
-//        val time2 = System.currentTimeMillis
-//        println(s"分区内计算开始，起始时间为$time2")
+        //        val time2 = System.currentTimeMillis
+        //        println(s"分区内计算开始，起始时间为$time2")
         val map = mutable.HashMap[String, Tile]()
         val ans = par.map { case ((xCode, yCode),
         (coverageMetadata, tileByteCounts, cell, geoTrans, tileOffsets, bandCount)) =>
@@ -216,37 +191,13 @@ package object coverage {
           // 计算
           val time6 = System.currentTimeMillis
           println(s"$xCode-${yCode}瓦片开始计算，当前时间为$time6")
-          val (xMin, yMin) = GEO_TO_PROJ(visTileGeoExtent.xmin, visTileGeoExtent.ymin)
-          val (xMax, yMax) = GEO_TO_PROJ(visTileGeoExtent.xmax, visTileGeoExtent.ymax)
-          val destExtent = Extent(xMin, yMin, xMax, yMax)
-          val destRaster: Raster[Tile] = Raster(ArrayTile.empty(IntCellType, 256, 256), destExtent)
-          val rrp = implicitly[RasterRegionReproject[Tile]]
-          cogTileArray.foreach { case (tile, innerExtent) =>
-            println(s"innerExtent: $innerExtent")
-            println(s"coverageMetaCrs: ${coverageMetadata.crs}")
-            // TODO 投影不一致时需要考虑gridBounds的计算
-            val gridBounds = GridBounds(0, 0, tile.cols - 1, tile.rows - 1)
-            val innerRasterExtent = RasterExtent(innerExtent, gridBounds.width, gridBounds.height)
-            val outerGridBounds =
-              GridBounds(
-                -gridBounds.colMin,
-                -gridBounds.rowMin,
-                tile.cols - gridBounds.colMin - 1,
-                tile.rows - gridBounds.rowMin - 1
-              )
-            val outerExtent = innerRasterExtent.extentFor(outerGridBounds, clamp = false)
-            val raster = Raster(tile, outerExtent)
-            rrp.regionReprojectMutable(
-              raster, coverageMetadata.crs, WebMercator, destRaster,
-              ProjectedExtent(innerExtent, coverageMetadata.crs).reprojectAsPolygon(WebMercator, 0.05),
-              ResampleMethod.DEFAULT, 0.05)
-          }
+          val destRaster = reproject(cogTileArray, visTileGeoExtent, coverageMetadata.crs)
           val time7 = System.currentTimeMillis
           println(s"$xCode-${yCode}瓦片计算结束，结束时间为$time7，耗时：${time7 - time6}ms")
           (SpatialKey(xCode, yCode), (coverageMetadata.measurementRank, destRaster.tile))
         }
-//        val time3 = System.currentTimeMillis
-//        println(s"分区内计算结束，结束时间为$time3，耗时: ${time3 - time2}ms")
+        //        val time3 = System.currentTimeMillis
+        //        println(s"分区内计算结束，结束时间为$time3，耗时: ${time3 - time2}ms")
         ans
       })
     val multibandTileRdd = tileRdd.groupByKey.map { case (spatialKey, iter) =>
@@ -273,7 +224,7 @@ package object coverage {
     if (metaList.isEmpty) {
       throw new Exception("No such coverage in database!")
     } else if (metaList.size > 1) {
-      metaList = metaList.take(3)  // 取前三个波段
+      metaList = metaList.take(3) // 取前三个波段
       metaList.foreach(meta => println(meta.measurement))
     }
 
@@ -282,7 +233,7 @@ package object coverage {
     //    } else {
     //      Array(Trigger.windowExtent)
     //    }
-//    val union = Array(geoExtent)
+    //    val union = Array(geoExtent)
     val crs = metaList.head.crs
     val queryGeometry = metaList.head.geom
     val tileMetadata: RDD[CoverageMetadata] = sc.makeRDD(metaList)
@@ -342,7 +293,7 @@ package object coverage {
     if (metaList.isEmpty) {
       throw new Exception("No such coverage in database!")
     } else if (metaList.size > 1) {
-      metaList = metaList.take(3)  // 取前三个波段
+      metaList = metaList.take(3) // 取前三个波段
       metaList.foreach(meta => println(meta.measurement))
     }
 
@@ -351,8 +302,8 @@ package object coverage {
     //    } else {
     //      Array(Trigger.windowExtent)
     //    }
-//    val union = Array(geoExtent)
-//    println(union(0))
+    //    val union = Array(geoExtent)
+    //    println(union(0))
     val crs = metaList.head.crs
     val queryGeometry = metaList.head.geom
     val tileMetadata: RDD[CoverageMetadata] = sc.makeRDD(metaList)
@@ -430,16 +381,52 @@ package object coverage {
   }
 
   /**
+   * 生成单个瓦片的重投影
+   *
+   * @param srcTileArray 原始瓦片集合
+   * @param extent       目标瓦片的地理坐标范围
+   * @param crs          原始坐标信息
+   * @return 重投影后的单个瓦片
+   */
+  private def reproject(srcTileArray: ArrayBuffer[(Tile, Extent)],
+                        extent: Extent,
+                        crs: CRS): Raster[Tile] = {
+    val (xMin, yMin) = GEO_TO_PROJ(extent.xmin, extent.ymin)
+    val (xMax, yMax) = GEO_TO_PROJ(extent.xmax, extent.ymax)
+    val destExtent = Extent(xMin, yMin, xMax, yMax)
+    val destRaster: Raster[Tile] = Raster(ArrayTile.empty(IntCellType, 256, 256), destExtent)
+    val rrp = implicitly[RasterRegionReproject[Tile]]
+    srcTileArray.foreach { case (tile, innerExtent) =>
+      val gridBounds = GridBounds(0, 0, tile.cols - 1, tile.rows - 1)
+      val innerRasterExtent = RasterExtent(innerExtent, gridBounds.width, gridBounds.height)
+      val outerGridBounds =
+        GridBounds(
+          -gridBounds.colMin,
+          -gridBounds.rowMin,
+          tile.cols - gridBounds.colMin - 1,
+          tile.rows - gridBounds.rowMin - 1
+        )
+      val outerExtent = innerRasterExtent.extentFor(outerGridBounds, clamp = false)
+      val raster = Raster(tile, outerExtent)
+      rrp.regionReprojectMutable(
+        raster, crs, WebMercator, destRaster,
+        ProjectedExtent(innerExtent, crs).reprojectAsPolygon(WebMercator, 0.05),
+        ResampleMethod.DEFAULT, 0.05)
+    }
+    destRaster
+  }
+
+  /**
    * 采用Shuffle方式重投影
    *
    * @param rawTileRdd 原始瓦片集合
-   * @param zoom       当前层及
+   * @param zoom       当前层级
    * @param crs        原始坐标信息
    * @return 重投影后的瓦片集合
    */
   private def reprojectByShuffle(rawTileRdd: RDD[RawTile],
-                                zoom: Int,
-                                crs: CRS): RDD[(SpatialKey, MultibandTile)] = {
+                                 zoom: Int,
+                                 crs: CRS): RDD[(SpatialKey, MultibandTile)] = {
     val spaceBandRdd = rawTileRdd.flatMap(rawTile => {
       val (tile, innerExtent) = (rawTile.tile, rawTile.extent)
       val gridBounds = GridBounds(0, 0, tile.cols - 1, tile.rows - 1)
@@ -462,16 +449,19 @@ package object coverage {
     })
 
     val rrp = implicitly[RasterRegionReproject[Tile]]
-    def createCombiner(tup: (Raster[Tile], RasterExtent, Polygon)) = {
+
+    def createCombiner(tup: (Raster[Tile], RasterExtent, Polygon)): Tile = {
       val (raster, destRE, destRegion) = tup
       rrp.regionReproject(raster, crs, WebMercator, destRE, destRegion, ResampleMethod.DEFAULT, 0.05).tile
     }
-    def mergeValues(reprojectedTile: Tile, toReproject: (Raster[Tile], RasterExtent, Polygon)) = {
+
+    def mergeValues(reprojectedTile: Tile, toReproject: (Raster[Tile], RasterExtent, Polygon)): Tile = {
       val (raster, destRE, destRegion) = toReproject
       val destRaster = Raster(reprojectedTile, destRE.extent)
       rrp.regionReprojectMutable(raster, crs, WebMercator, destRaster, destRegion, ResampleMethod.DEFAULT, 0.05).tile
     }
-    def mergeCombiners(reproj1: Tile, reproj2: Tile) = reproj1.merge(reproj2)
+
+    def mergeCombiners(reproj1: Tile, reproj2: Tile): Tile = reproj1.merge(reproj2)
 
     spaceBandRdd
       .combineByKey(createCombiner, mergeValues, mergeCombiners)
