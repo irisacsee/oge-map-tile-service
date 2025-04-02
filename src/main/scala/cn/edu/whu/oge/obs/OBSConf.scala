@@ -1,6 +1,8 @@
 package cn.edu.whu.oge.obs
 
 case object OBSConf {
+  type OBSConfTuple = (String, String, String, String, Int)
+
   var endpoint: String = _
   var accessKey: String = _
   var secretKey: String = _
@@ -12,4 +14,6 @@ case object OBSConf {
                                      |secretKey: $secretKey
                                      |bucketName: $bucketName
                                      |maxConnections: $maxConnections""".stripMargin
+
+  def toTuple: OBSConfTuple = (endpoint, accessKey, secretKey, bucketName, maxConnections)
 }

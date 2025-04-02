@@ -2,6 +2,7 @@ package cn.edu.whu.oge.coverage
 
 import cn.edu.whu.oge.coverage.CoordinateTransformer.projTileCodeToGeoExtent
 import cn.edu.whu.oge.coverage.TileSerializer.deserializeTileData
+import cn.edu.whu.oge.obs.OBSConf.bucketName
 import geotrellis.layer.SpatialKey
 import geotrellis.proj4.LatLng
 import geotrellis.vector.Extent
@@ -37,12 +38,6 @@ object COGParser {
     4, // float",4), // Single precision (4-byte) IEEE format
     8 // double",8) // Double precision (8-byte) IEEE format
   )
-  // 地图 zoom 为0时的分辨率，以下按zoom递增
-  private val WEB_MERCATOR_RESOLUTION: Array[Double] = Array(
-    156543.033928, 78271.516964, 39135.758482, 19567.879241, 9783.939621,
-    4891.969810, 2445.984905, 1222.992453, 611.496226, 305.748113,
-    152.874057, 76.437028, 38.218514, 19.109257, 9.554629,
-    4.777314, 2.388657, 1.194329, 0.597164, 0.298582, 0.149291)
   private final val HEAD_BYTE_COUNT = 8
   private final val LANDSAT_LEVEL_TILE_COUNTS = Map(
     30 -> Array(961, 256, 64, 16, 4), 15 -> Array(3782, 961, 256, 64, 16, 4))
@@ -52,6 +47,12 @@ object COGParser {
   var tileDifference = 0
   var queryExtent: Extent = _
 
+  type COGTileMeta = (CoverageMetadata,
+    ArrayBuffer[ArrayBuffer[ArrayBuffer[Long]]],
+    ArrayBuffer[Double], ArrayBuffer[Double],
+    ArrayBuffer[ArrayBuffer[ArrayBuffer[Long]]],
+    Int)
+
   /**
    * 根据影像元数据查询COG文件内的瓦片元数据，应用在方法1
    *
@@ -59,15 +60,12 @@ object COGParser {
    * @param zoom             当前前端层级
    * @param coverageMetadata 影像元数据
    * @param bandCounts       波段数列表
-   * @return 六元组，(影像元数据, 各瓦片字节数, cell, geoTrans, 各瓦片偏移量, 波段数)
+   * @return COGMeta即六元组，(影像元数据, 各瓦片字节数, cell, geoTrans, 各瓦片偏移量, 波段数)
    */
   def cogTileQueryForM1(obs: MinioClient,
                         zoom: Int,
                         coverageMetadata: CoverageMetadata,
-                        bandCounts: Int*): (CoverageMetadata,
-    ArrayBuffer[ArrayBuffer[ArrayBuffer[Long]]],
-    ArrayBuffer[Double], ArrayBuffer[Double],
-    ArrayBuffer[ArrayBuffer[ArrayBuffer[Long]]], Int) = {
+                        bandCounts: Int*): COGTileMeta = {
     visZoom = zoom
     var bandCount = 1
     if (bandCounts.length > 1) throw new RuntimeException("bandCount 参数最多传一个")
@@ -83,7 +81,7 @@ object COGParser {
     val tileOffsets: ArrayBuffer[ArrayBuffer[ArrayBuffer[Long]]] = ArrayBuffer.empty[ArrayBuffer[ArrayBuffer[Long]]]
     val inputStream: InputStream = obs.getObject(GetObjectArgs
       .builder
-      .bucket("oge")
+      .bucket(bucketName)
       .`object`(coverageMetadata.path)
       .offset(0L)
       .length(COG_HEAD_SIZE)
@@ -138,7 +136,7 @@ object COGParser {
     val tileOffsets: ArrayBuffer[ArrayBuffer[ArrayBuffer[Long]]] = ArrayBuffer.empty[ArrayBuffer[ArrayBuffer[Long]]]
     val inputStream: InputStream = obs.getObject(GetObjectArgs
       .builder
-      .bucket("oge")
+      .bucket(bucketName)
       .`object`(coverageMetadata.path)
       .offset(0L)
       .length(COG_HEAD_SIZE)
@@ -346,6 +344,7 @@ object COGParser {
         level = 0
       }
     }
+//    println(s"level: $level")
 
     /// 使用窗口范围的全局变量
     val queryEnv: Envelope = queryGeometry.getEnvelopeInternal
@@ -449,7 +448,7 @@ object COGParser {
     //    println(s"path: $path, offset: $offset, byteCount: $byteCount")
     val inputStream: InputStream = obs.getObject(GetObjectArgs
       .builder
-      .bucket("oge")
+      .bucket(bucketName)
       .`object`(path)
       .offset(offset)
       .length(byteCount)
@@ -477,7 +476,7 @@ object COGParser {
                           rawTile: RawTile): Unit = {
     val inputStream: InputStream = obs.getObject(GetObjectArgs
       .builder
-      .bucket("oge")
+      .bucket(bucketName)
       .`object`(rawTile.path)
       .offset(rawTile.offset)
       .length(rawTile.byteCount)
@@ -513,7 +512,7 @@ object COGParser {
     //    println(s"path: $path, offset: $startPos, byteCount: $byteCount")
     val inputStream = obs.getObject(GetObjectArgs
       .builder
-      .bucket("oge")
+      .bucket(bucketName)
       .`object`(path)
       .offset(startPos)
       .length(byteCount)
@@ -660,7 +659,7 @@ object COGParser {
       case 34737 => //Spatial reference
         val crs: String = getString(head, pData, typeSize * count)
       case _ =>
-        println("不支持该tagIndex")
+//        println("不支持该tagIndex")
     }
   }
 

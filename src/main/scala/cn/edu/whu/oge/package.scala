@@ -2,6 +2,7 @@ package cn.edu.whu
 
 import cn.edu.whu.oge.db.DBConf
 import cn.edu.whu.oge.obs.OBSConf
+import cn.edu.whu.oge.server.ServerConf
 import org.apache.spark.{SparkConf, SparkContext}
 import org.yaml.snakeyaml.Yaml
 
@@ -28,8 +29,11 @@ package object oge {
     val confMap = getMapFromYaml(s"/$runEnv.yaml")
     loadDBConf(confMap.get("db").asInstanceOf[JavaStringMap])
     loadOBSConf(confMap.get("obs").asInstanceOf[JavaStringMap])
+    loadServerConf(confMap.get("server").asInstanceOf[JavaStringMap])
+    loadStoreConf(confMap.get("store").asInstanceOf[JavaStringMap])
     if (runEnv == "local") sparkConf.setMaster("local[*]")
     sc = new SparkContext(sparkConf)
+    sc.setLogLevel("ERROR")
     println(s"配置加载耗时：${System.currentTimeMillis - start}ms")
   }
 
@@ -68,4 +72,22 @@ package object oge {
     OBSConf.bucketName = obsMap.get("bucketName").asInstanceOf[String]
     OBSConf.maxConnections = obsMap.get("maxConnections").asInstanceOf[Int]
   }
+
+  /**
+   * 加载服务端配置
+   *
+   * @param server 对象存储配置信息Map
+   */
+  private def loadServerConf(server: JavaStringMap): Unit = {
+    ServerConf.jobServer = server.get("jobServer").asInstanceOf[String]
+    ServerConf.dataServer = server.get("dataServer").asInstanceOf[String]
+    ServerConf.innerServer = server.get("innerServer").asInstanceOf[String]
+  }
+
+  /**
+   * 加载瓦片存储配置配置
+   *
+   * @param store 对象存储配置信息Map
+   */
+  private def loadStoreConf(store: JavaStringMap): Unit = coverage.storePath = store.get("path").asInstanceOf[String]
 }

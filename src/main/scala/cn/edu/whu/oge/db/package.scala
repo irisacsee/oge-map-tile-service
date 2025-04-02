@@ -1,6 +1,5 @@
 package oge
 
-import cn.edu.whu.oge.db.DBConf
 import cn.edu.whu.oge.db.DBConf.{maxRetries, pwd, retryDelay, url, user}
 
 import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet}

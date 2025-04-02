@@ -25,3 +25,13 @@ case class RawTile(var path: String,
                    var dataType: OGEDataType,
                    var tile: Tile,
                    var projCodes: ArrayBuffer[SpatialKey])
+
+case class RawMultibandTile(var tileArrays: Vector[Array[Int]],
+                            var extent: Extent,
+                            var crs: CRS,
+                            var projCodes: ArrayBuffer[SpatialKey])
+
+case class RawMultibandTileInCompute[MR](var mrArrays: Vector[Array[MR]],
+                                         var extent: Extent,
+                                         var crs: CRS,
+                                         var projCodes: ArrayBuffer[SpatialKey])

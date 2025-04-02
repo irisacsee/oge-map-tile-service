@@ -1,10 +1,9 @@
 package cn.edu.whu.oge
 
-import cn.edu.whu.oge.coverage.CoordinateTransformer.projTileCodeToGeoExtent
-import cn.edu.whu.oge.coverage.{generateVisTilesByPipeline, generateVisTilesByPipelineV2, generateVisTilesByShuffle, generateVisTilesByShuffleV2, geoExtent}
+import cn.edu.whu.oge.coverage.{FocalMeanOperators, demAspect, focalMean, generateVisTilesByForwardMatchV1, generateVisTilesByForwardMatchV2, generateVisTilesByInvertedMatchV1, generateVisTilesByInvertedMatchV2, normalizedDifference, partitionNum, rawAspect, rawDEMAspect, rawDEMSlope, rawFocalMean, rawSlope, readRawTiles, rmtReprojectByShuffle, writeVisTiles, writeVisTilesV2}
+import cn.edu.whu.oge.server.jobFinished
 import geotrellis.layer.SpatialKey
 import geotrellis.spark.MultibandTileLayerRDD
-import geotrellis.vector.Extent
 
 object Main {
   final val TEST_CODES_1 = Array(Array(
@@ -56,34 +55,93 @@ object Main {
     ))
   final val TEST_ZOOMS_1 = Array(11, 11, 11, 11, 10)
   final val TEST_ZOOMS_2 = Array(11, 11, 11, 11, 10)
+  final val TEST_SET = Array(
+    Set("B1", "B3", "B4"),
+    Set("B3", "B5"),
+    Set("B1"),
+  )
 
-  var geoExtents1: Array[Extent] = _
-  var geoExtents2: Array[Extent] = _
+//  var geoExtents1: Array[Extent] = _
+//  var geoExtents2: Array[Extent] = _
 
   def main(args: Array[String]): Unit = {
-    geoExtents1 = computeGeoExtents(TEST_CODES_1, TEST_ZOOMS_1)
-    geoExtents2 = computeGeoExtents(TEST_CODES_2, TEST_ZOOMS_2)
+//    geoExtents1 = computeGeoExtents(TEST_CODES_1, TEST_ZOOMS_1)
+//    geoExtents2 = computeGeoExtents(TEST_CODES_2, TEST_ZOOMS_2)
+
     // 加载配置
     if (args.length == 0) {
       loadConf()
-    } else { // args: 环境，测试方法，数据（单/多波段），数据规模编号
+    } else { // args: 环境，测试方法，数据（单/多波段），数据规模编号，波段Set，分区数（可选）
+      if (args.length == 6) {
+        partitionNum = args(5).toInt
+      }
+      val set = TEST_SET(args(4).toInt)
       loadConf(args(0))
       val index = args(3).toInt
+
       val start = System.currentTimeMillis
-      val rdd = if (args(1) == "11") {
-        testM1(args(2), index)
+      val (rdd, zoom, codes) = if (args(1) == "11") {
+        testM1(args(2), index, set)
       } else if (args(1) == "12") {
-        testM1V2(args(2), index)
+        testM1V2(args(2), index, set)
       } else if (args(1) == "21") {
-        testM2(args(2), index)
+        testM2(args(2), index, set)
+      } else if (args(1) == "22") {
+        testM2V2(args(2), index, set)
       } else {
-        testM2V2(args(2), index)
+        val codes = TEST_CODES_2(index)
+        val zoom = TEST_ZOOMS_2(index)
+        val rawMultibandTilesWithMeta =
+          readRawTiles(codes, "LC81220392015275LGN00", "LC08_L1T", zoom, set)
+        val results = args(2) match {
+          case "focalMean" => rawFocalMean(rawMultibandTilesWithMeta, 3)()
+          case "focalMeanV2" => rawFocalMean(rawMultibandTilesWithMeta, 50)("v2")
+          case "demAspect" => rawDEMAspect(rawMultibandTilesWithMeta)(zoom)
+          case "demAspectV2" => rawDEMAspect(rawMultibandTilesWithMeta)(zoom, "v2")
+          case "demSlope" => rawDEMSlope(rawMultibandTilesWithMeta)(zoom)
+          case "demSlopeV2" => rawDEMSlope(rawMultibandTilesWithMeta)(zoom, "v2")
+          case "aspect" => rawAspect(rawMultibandTilesWithMeta)(zoom)
+          case "aspectV2" => rawAspect(rawMultibandTilesWithMeta)(zoom, "v2")
+          case "slope" => rawSlope(rawMultibandTilesWithMeta)(zoom)
+          case "slopeV2" => rawSlope(rawMultibandTilesWithMeta)(zoom, "v2")
+        }
+        (rmtReprojectByShuffle(results, codes, zoom), zoom, codes)
       }
 //      rdd.persist
+//      rdd
+//        .map(_._1)
+//        .collect
+//        .sortBy(_.col)
+//        .groupBy(_.col)
+//        .foreach { case (_, keys) =>
+//          keys
+//            .sortBy(_.row)
+//            .foreach(key => print(s"$key "))
+//          println
+//        }
       println(s"瓦片总数：${rdd.count}")
       println(s"瓦片范围：${rdd.metadata.extent}")
-      println(s"Key范围：${rdd.metadata.bounds}")
+      println(s"Key范围：${rdd.metadata.bounds.get}")
       println(s"总耗时：${System.currentTimeMillis - start}")
+
+      // NDWI测试
+//      val result = normalizedDifference(Seq(rdd))
+      // 均值滤波测试
+//      val result = focalMean(Seq(rdd), 3)("v2")
+      // 坡向测试
+//      val result = aspect(Seq(rdd))(zoom)
+      // 坡度测试
+//      val result = slope(Seq(rdd))(zoom)
+//      println(s"瓦片总数：${result.count}")
+//      println(s"瓦片范围：${result.metadata.extent}")
+//      println(s"Key范围：${result.metadata.bounds}")
+//      println(s"总耗时：${System.currentTimeMillis - start}")
+
+//      writeVisTiles(rdd, args(2), zoom)
+//      writeVisTilesV2(rdd, args(2), zoom, "png")
+//      jobFinished(codes, args(2), zoom)
+
+      // 输出测试
 //      rdd
 //        .map(_._1)
 //        .collect
@@ -100,49 +158,61 @@ object Main {
     sc.stop
   }
 
-  def computeGeoExtents(codes: Array[Array[(Int, Int)]], zooms: Array[Int]): Array[Extent] = {
-    val extents = new Array[Extent](codes.length)
-    codes.zipWithIndex.foreach { case (arr, i) =>
-      val xCodes = arr.map(_._1)
-      val yCodes = arr.map(_._2)
-      val leftBottom = projTileCodeToGeoExtent(SpatialKey(xCodes.min, yCodes.max), zooms(i))
-      val rightTop = projTileCodeToGeoExtent(SpatialKey(xCodes.max, yCodes.min), zooms(i))
-      extents(i) = Extent(leftBottom.xmin, leftBottom.ymin, rightTop.xmax, rightTop.ymax)
-    }
-    extents
-  }
+//  def computeGeoExtents(codes: Array[Array[(Int, Int)]], zooms: Array[Int]): Array[Extent] = {
+//    val extents = new Array[Extent](codes.length)
+//    codes.zipWithIndex.foreach { case (arr, i) =>
+//      val xCodes = arr.map(_._1)
+//      val yCodes = arr.map(_._2)
+//      val leftBottom = projTileCodeToGeoExtent(SpatialKey(xCodes.min, yCodes.max), zooms(i))
+//      val rightTop = projTileCodeToGeoExtent(SpatialKey(xCodes.max, yCodes.min), zooms(i))
+//      extents(i) = Extent(leftBottom.xmin, leftBottom.ymin, rightTop.xmax, rightTop.ymax)
+//    }
+//    extents
+//  }
 
-  def testM1(data: String, index: Int): MultibandTileLayerRDD[SpatialKey] =
+  def testM1(data: String, index: Int, set: Set[String]): (MultibandTileLayerRDD[SpatialKey], Int, Array[(Int, Int)]) =
     if (data == "multi") {
-      generateVisTilesByPipeline(sc, TEST_CODES_2(index), "LC81220392015275LGN00", "LC08_L1T", TEST_ZOOMS_2(index))
+      val codes = TEST_CODES_2(index)
+      val zoom = TEST_ZOOMS_2(index)
+      (generateVisTilesByForwardMatchV1(codes, "LC81220392015275LGN00", "LC08_L1T", zoom, set), zoom, codes)
     } else {
-      generateVisTilesByPipeline(sc, TEST_CODES_1(index), "ASTGTM_N28E056", "ASTER_GDEM_DEM30", TEST_ZOOMS_1(index))
-    }
-
-
-  def testM1V2(data: String, index: Int): MultibandTileLayerRDD[SpatialKey] =
-    if (data == "multi") {
-      generateVisTilesByPipelineV2(sc, TEST_CODES_2(index), "LC81220392015275LGN00", "LC08_L1T", TEST_ZOOMS_2(index))
-    } else {
-      generateVisTilesByPipelineV2(sc, TEST_CODES_1(index), "ASTGTM_N28E056", "ASTER_GDEM_DEM30", TEST_ZOOMS_1(index))
+      val codes = TEST_CODES_1(index)
+      val zoom = TEST_ZOOMS_1(index)
+      (generateVisTilesByForwardMatchV1(codes, "ASTGTM_N28E056", "ASTER_GDEM_DEM30", zoom, set), zoom, codes)
     }
 
 
-  def testM2(data: String, index: Int): MultibandTileLayerRDD[SpatialKey] =
+  def testM1V2(data: String, index: Int, set: Set[String]): (MultibandTileLayerRDD[SpatialKey], Int, Array[(Int, Int)]) =
     if (data == "multi") {
-      geoExtent = geoExtents2(index)
-      generateVisTilesByShuffle(sc, TEST_CODES_2(index), "LC81220392015275LGN00", "LC08_L1T", TEST_ZOOMS_2(index))
+      val codes = TEST_CODES_2(index)
+      val zoom = TEST_ZOOMS_2(index)
+      (generateVisTilesByForwardMatchV2(codes, "LC81220392015275LGN00", "LC08_L1T", zoom, set), zoom, codes)
     } else {
-      geoExtent = geoExtents1(index)
-      generateVisTilesByShuffle(sc, TEST_CODES_1(index), "ASTGTM_N28E056", "ASTER_GDEM_DEM30", TEST_ZOOMS_1(index))
+      val codes = TEST_CODES_1(index)
+      val zoom = TEST_ZOOMS_1(index)
+      (generateVisTilesByForwardMatchV2(codes, "ASTGTM_N28E056", "ASTER_GDEM_DEM30", zoom, set), zoom, codes)
     }
 
-  def testM2V2(data: String, index: Int): MultibandTileLayerRDD[SpatialKey] =
+
+  def testM2(data: String, index: Int, set: Set[String]): (MultibandTileLayerRDD[SpatialKey], Int, Array[(Int, Int)]) =
     if (data == "multi") {
-      geoExtent = geoExtents2(index)
-      generateVisTilesByShuffleV2(sc, TEST_CODES_2(index), "LC81220392015275LGN00", "LC08_L1T", TEST_ZOOMS_2(index))
+      val codes = TEST_CODES_2(index)
+      val zoom = TEST_ZOOMS_2(index)
+      (generateVisTilesByInvertedMatchV1(codes, "LC81220392015275LGN00", "LC08_L1T", zoom, set), zoom, codes)
     } else {
-      geoExtent = geoExtents1(index)
-      generateVisTilesByShuffleV2(sc, TEST_CODES_1(index), "ASTGTM_N28E056", "ASTER_GDEM_DEM30", TEST_ZOOMS_1(index))
+      val codes = TEST_CODES_1(index)
+      val zoom = TEST_ZOOMS_1(index)
+      (generateVisTilesByInvertedMatchV1(codes, "ASTGTM_N28E056", "ASTER_GDEM_DEM30", zoom, set), zoom, codes)
+    }
+
+  def testM2V2(data: String, index: Int, set: Set[String]): (MultibandTileLayerRDD[SpatialKey], Int, Array[(Int, Int)]) =
+    if (data == "multi") {
+      val codes = TEST_CODES_2(index)
+      val zoom = TEST_ZOOMS_2(index)
+      (generateVisTilesByInvertedMatchV2(codes, "LC81220392015275LGN00", "LC08_L1T", zoom, set), zoom, codes)
+    } else {
+      val codes = TEST_CODES_1(index)
+      val zoom = TEST_ZOOMS_1(index)
+      (generateVisTilesByInvertedMatchV2(codes, "ASTGTM_N28E056", "ASTER_GDEM_DEM30", zoom, set), zoom, codes)
     }
 }

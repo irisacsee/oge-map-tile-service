@@ -1,6 +1,5 @@
 package cn.edu.whu.oge
 
-import cn.edu.whu.oge.obs.OBSConf.{accessKey, endpoint, secretKey}
 import io.minio.MinioClient
 
 /**
@@ -10,7 +9,7 @@ import io.minio.MinioClient
  * @since 2025/2/14
  */
 package object obs {
-  def getMinioClient: MinioClient = {
+  def getMinioClient(endpoint: String, accessKey: String, secretKey: String): MinioClient = {
     val minioClient: MinioClient = MinioClient.builder()
       .endpoint(endpoint)
       .credentials(accessKey, secretKey)
