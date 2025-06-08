@@ -108,7 +108,7 @@ package object coverage {
 
     // 找到每个TMS瓦片需要的COG瓦片，然后生成TMS瓦片
     val tileRdd = sc
-      .parallelize(forwardMatch(obsConfTuple, coverageId, metaList, projTileCodes, zoom), partitionNum)
+      .parallelize(forwardMatch(obsConfTuple, metaList, projTileCodes, zoom), partitionNum)
       .mapPartitions(readAndGenerateFunc())
     val multibandTileRdd = tileRdd
       .filter(_ != null)
@@ -129,26 +129,25 @@ package object coverage {
    * @return 可视瓦片号到COG瓦片元数据的匹配对数组
    */
   private def forwardMatch(obsConfTuple: (String, String, String, String, Int),
-                           coverageId: String,
                            cogMetaList: ListBuffer[CoverageMetadata],
                            projTileCodes: Array[(Int, Int)],
                            zoom: Int): Array[((Int, Int), COGTileMeta)] = {
     // 头部解析
     val time1 = System.currentTimeMillis
-    val tilesMeta = if (COG_TILE_META_CACHE.containsKey(coverageId)) COG_TILE_META_CACHE.get(coverageId) else {
-      val ans = sc
-        .makeRDD(cogMetaList)
-        .mapPartitions(par => {
-          val obs = getMinioClient(obsConfTuple._1, obsConfTuple._2, obsConfTuple._3)
-          bucketName = obsConfTuple._4
-          par.map(coverageMetadata =>
-            (s"${coverageMetadata.coverageId}-${coverageMetadata.measurement}",
-              cogTileQueryForM1(obs, zoom, coverageMetadata)))
-        })
-        .collect
-      COG_TILE_META_CACHE.put(coverageId, ans)
-      ans
-    }
+    val noTileMetaCache = cogMetaList.filter(meta => !COG_TILE_META_CACHE.containsKey(meta.path))
+    val noCacheTilesMeta = if (noTileMetaCache.nonEmpty) sc
+      .makeRDD(noTileMetaCache)
+      .mapPartitions(par => {
+        val obs = getMinioClient(obsConfTuple._1, obsConfTuple._2, obsConfTuple._3)
+        bucketName = obsConfTuple._4
+        par.map(coverageMetadata =>
+          (s"${coverageMetadata.coverageId}-${coverageMetadata.measurement}",
+            cogTileQueryForM1(obs, zoom, coverageMetadata)))
+      })
+      .collect else Array.empty[(String, COGTileMeta)]
+    noCacheTilesMeta.foreach(tm => COG_TILE_META_CACHE.put(tm._2._1.path, tm))
+    val tilesMeta = if (cogMetaList.size == noTileMetaCache.size) noCacheTilesMeta
+    else cogMetaList.map(meta => COG_TILE_META_CACHE.get(meta.path)).toArray
     println(s"头部解析耗时：${System.currentTimeMillis - time1}")
     val tileCodesWithId = tilesMeta.flatMap { case (key, meta) =>
       projTileCodes.map(code => (code, meta))

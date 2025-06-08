@@ -14,7 +14,7 @@ import scala.concurrent.Future
 object CacheManager {
   type StringBytesMap = util.HashMap[String, Array[Byte]]
   type ListBufferMap = util.HashMap[String, ListBuffer[CoverageMetadata]]
-  type COGTileMetaMap = util.HashMap[String, Array[(String, COGTileMeta)]]
+  type COGTileMetaMap = util.HashMap[String, (String, COGTileMeta)]
 
   final val TILE_CACHE: StringBytesMap = new StringBytesMap()
   final val COG_META_CACHE: ListBufferMap = new ListBufferMap()
