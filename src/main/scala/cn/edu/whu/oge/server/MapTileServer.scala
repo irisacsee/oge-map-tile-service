@@ -8,7 +8,7 @@ import cn.edu.whu.oge.Main.{TEST_CODES_2, TEST_ZOOMS_2}
 import cn.edu.whu.oge.coverage.CoordinateTransformer.{GEO_TO_PROJ, LAYOUTS}
 import cn.edu.whu.oge.coverage.{focalMean, generateVisTilesByInvertedMatchV2, partitionNum, rawFocalMean, readRawTiles, rmtReprojectByShuffle, storePath, writeVisTilesSingleBand, writeVisTilesV2}
 import cn.edu.whu.oge.loadConf
-import cn.edu.whu.oge.server.CacheManager.{CACHE, getTileBytes, loadTileBytes}
+import cn.edu.whu.oge.server.CacheManager.{TILE_CACHE, getTileBytes, loadTileBytes}
 import cn.edu.whu.oge.server.ServerConf.innerServer
 import geotrellis.layer.SpatialKey
 
@@ -31,7 +31,7 @@ object MapTileServer {
           pathPrefix("tile") {
             path(Segment / Segment / Segment / Segment) { (layerId, zoom, x, yWithFormat) =>
               val Array(y, format) = yWithFormat.split("\\.")
-              println(s"当前结果总数：${CACHE.size}")
+              println(s"当前结果总数：${TILE_CACHE.size}")
               val bytesKey = s"$layerId/$zoom/$format/$x-$y"
               val bytes = getTileBytes(bytesKey, format)
               onSuccess(bytes) { result =>
@@ -109,7 +109,7 @@ object MapTileServer {
                 val projCodes = ArrayBuffer[(Int, Int)]()
                 for (xCode <- xCodeMin to xCodeMax; yCode <- yCodeMin to yCodeMax) {
                   val bytesKey = s"$preKey/$xCode-$yCode"
-                  if (!CACHE.containsKey(bytesKey)) {
+                  if (!TILE_CACHE.containsKey(bytesKey)) {
                     projCodes.append((xCode, yCode))
                   }
                 }

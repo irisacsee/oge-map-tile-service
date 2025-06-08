@@ -8,6 +8,7 @@ import cn.edu.whu.oge.coverage.DEMOperators.DEMWindow
 import cn.edu.whu.oge.coverage.TileSerializer.deserializeTileData
 import cn.edu.whu.oge.obs.OBSConf.{OBSConfTuple, bucketName}
 import cn.edu.whu.oge.obs.{OBSConf, getMinioClient}
+import cn.edu.whu.oge.server.CacheManager.{COG_META_CACHE, COG_TILE_META_CACHE}
 import geotrellis.layer.{Bounds, KeyBounds, SpatialKey, TileLayerMetadata}
 import geotrellis.proj4.{CRS, WebMercator}
 import geotrellis.raster.reproject.RasterRegionReproject
@@ -63,7 +64,11 @@ package object coverage {
   private def cogMetaQuery(coverageId: String,
                            productKey: String,
                            bandNames: Set[String]): ListBuffer[CoverageMetadata] = {
-    var metaList = queryCoverage(coverageId, productKey)
+    var metaList = if (COG_META_CACHE.containsKey(coverageId)) COG_META_CACHE.get(coverageId) else {
+      val ans = queryCoverage(coverageId, productKey)
+      COG_META_CACHE.put(coverageId, ans)
+      ans
+    }
     println(metaList.head)
     if (metaList.isEmpty) {
       throw new Exception("No such coverage in database!")
@@ -103,7 +108,7 @@ package object coverage {
 
     // 找到每个TMS瓦片需要的COG瓦片，然后生成TMS瓦片
     val tileRdd = sc
-      .parallelize(forwardMatch(obsConfTuple, metaList, projTileCodes, zoom), partitionNum)
+      .parallelize(forwardMatch(obsConfTuple, coverageId, metaList, projTileCodes, zoom), partitionNum)
       .mapPartitions(readAndGenerateFunc())
     val multibandTileRdd = tileRdd
       .filter(_ != null)
@@ -124,21 +129,26 @@ package object coverage {
    * @return 可视瓦片号到COG瓦片元数据的匹配对数组
    */
   private def forwardMatch(obsConfTuple: (String, String, String, String, Int),
+                           coverageId: String,
                            cogMetaList: ListBuffer[CoverageMetadata],
                            projTileCodes: Array[(Int, Int)],
                            zoom: Int): Array[((Int, Int), COGTileMeta)] = {
     // 头部解析
     val time1 = System.currentTimeMillis
-    val tileMetadata = sc.makeRDD(cogMetaList)
-    val tilesMeta = tileMetadata
-      .mapPartitions(par => {
-        val obs = getMinioClient(obsConfTuple._1, obsConfTuple._2, obsConfTuple._3)
-        bucketName = obsConfTuple._4
-        par.map(coverageMetadata =>
-          (s"${coverageMetadata.coverageId}-${coverageMetadata.measurement}",
-            cogTileQueryForM1(obs, zoom, coverageMetadata)))
-      })
-      .collect
+    val tilesMeta = if (COG_TILE_META_CACHE.containsKey(coverageId)) COG_TILE_META_CACHE.get(coverageId) else {
+      val ans = sc
+        .makeRDD(cogMetaList)
+        .mapPartitions(par => {
+          val obs = getMinioClient(obsConfTuple._1, obsConfTuple._2, obsConfTuple._3)
+          bucketName = obsConfTuple._4
+          par.map(coverageMetadata =>
+            (s"${coverageMetadata.coverageId}-${coverageMetadata.measurement}",
+              cogTileQueryForM1(obs, zoom, coverageMetadata)))
+        })
+        .collect
+      COG_TILE_META_CACHE.put(coverageId, ans)
+      ans
+    }
     println(s"头部解析耗时：${System.currentTimeMillis - time1}")
     val tileCodesWithId = tilesMeta.flatMap { case (key, meta) =>
       projTileCodes.map(code => (code, meta))
