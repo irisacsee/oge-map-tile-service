@@ -374,6 +374,7 @@ package object coverage {
 
     val tileRddRePar = tileRddFlat.repartition(math.min(tileNum, partitionNum))
     tileRddFlat.unpersist()
+    tileRddRePar
   }
 
   /**
